@@ -1,6 +1,6 @@
 // SaveImageCopy - frontend extension (v2)
-//  - [💾 | 📁] half-and-half button row + path field below the preview
-//  - filename_prefix moved to the very bottom of the node
+//  - [💾 | 📁] half-and-half button row + backup_prefix field below the preview
+//  - save_prefix moved to the very bottom of the node (+ bottom spacer)
 //  - left click on the preview -> fullscreen (aspect ratio preserved)
 //  - hand cursor on preview and on the buttons
 //  - node drag / resize never triggers a click action
@@ -20,6 +20,7 @@ const CLOSE_DELAY = 300;   // ms; fullscreen ignores closing input right after o
 const MARGIN = 15;         // same side margin as default widgets
 const GAP = 4;             // gap between the two buttons
 const MIN_ROW_WIDTH = 80;  // minimum node width required by the button row
+const BOTTOM_SPACE = 12;   // extra px under the last widget (+ ~4px widget gap ~= MARGIN)
 
 // Width of ONE of the two half buttons, from the node's current width.
 const rowButtonWidth = (node) => Math.max(0, (node.size[0] - MARGIN * 2 - GAP) / 2);
@@ -61,14 +62,28 @@ function nodeKey(node) {
 }
 
 // Widgets that must stay at the bottom, in this order:
-// [button row, path field, filename_prefix]
+// [button row, backup_prefix field, save_prefix, bottom spacer]
 function tailWidgets(node) {
     const s = node.__sic;
     if (!s) return [];
     const list = [s.row, s.pathW];
-    const prefixW = node.widgets?.find((w) => w.name === "filename_prefix");
+    const prefixW = node.widgets?.find((w) => w.name === "save_prefix");
     if (prefixW) list.push(prefixW);
+    list.push(s.spacer);
     return list;
+}
+
+// Invisible widget that only adds empty space below the last input field.
+function makeSpacer() {
+    return {
+        type: "sic_spacer",
+        name: "sic_spacer",
+        value: null,
+        serialize: false,
+        options: { serialize: false },
+        computeSize() { return [MIN_ROW_WIDTH, BOTTOM_SPACE]; },
+        draw() {},
+    };
 }
 
 function ensureOrder(node) {
@@ -419,25 +434,30 @@ app.registerExtension({
             const row = makeButtonRow(node);
             node.addCustomWidget(row);
 
-            // path field (node.properties -> not part of the prompt, no re-run on edit)
+            // backup_prefix field (node.properties -> not part of the prompt, no re-run on edit)
+            // (old workflows stored it as properties.copy_path)
             const pathW = node.addWidget(
                 "text",
-                "path",
-                node.properties.copy_path ?? "",
-                (v) => { node.properties.copy_path = v; }
+                "backup_prefix",
+                node.properties.backup_prefix ?? node.properties.copy_path ?? "",
+                (v) => { node.properties.backup_prefix = v; }
             );
             noSerialize(row);
             noSerialize(pathW);
 
+            const spacer = makeSpacer();
+            node.addCustomWidget(spacer);
+
             node.__sic = {
                 row,
                 pathW,
+                spacer,
                 key: null,
                 async doSave() {
                     try {
                         const data = await post(`${ROUTE}/copy_last`, {
                             node_id: nodeKey(node),
-                            target_dir: pathW.value ?? "",
+                            backup_prefix: pathW.value ?? "",
                         });
                         toast(data.ok, data.ok ? data.message : data.error || "Unknown error");
                     } catch (err) {
@@ -465,8 +485,9 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             origConfigure?.apply(this, arguments);
             const pathW = this.__sic?.pathW;
-            if (pathW && this.properties?.copy_path !== undefined) {
-                pathW.value = this.properties.copy_path;
+            const saved = this.properties?.backup_prefix ?? this.properties?.copy_path;
+            if (pathW && saved !== undefined) {
+                pathW.value = saved;
             }
             ensureOrder(this);
         };
